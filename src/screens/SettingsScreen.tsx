@@ -1,330 +1,245 @@
 import React, { useState, useEffect } from 'react';
-import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    ScrollView,
-    StyleSheet,
-    ActivityIndicator,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Haptics from 'expo-haptics';
-import {
-    Settings as SettingsIcon,
-    Key,
-    Lock,
-    Folder,
-    Save,
-    CheckCircle2,
-    AlertCircle,
-    Server,
-} from 'lucide-react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { Settings, Server, Key, Folder, LogOut, ChevronRight, Bell, Shield, CircleHelp, ChevronDown, Check, Save } from 'lucide-react-native';
+import ScreenWrapper from '../components/ScreenWrapper';
 import { useApp } from '../context/AppContext';
-import { colors, borderRadius, spacing } from '../theme/colors';
+import * as Haptics from 'expo-haptics';
 
 export default function SettingsScreen() {
-    const { config, saveConfig, serverHost, setServerHost } = useApp();
+    const { config, saveConfig, serverHost, setServerHost, setToken } = useApp();
+
+    // Local state for configuration
     const [localConfig, setLocalConfig] = useState({
-        geminiKey: config.geminiKey,
-        authToken: config.authToken,
-        workspacePath: config.workspacePath,
+        geminiKey: config.geminiKey || '',
+        authToken: config.authToken || '',
+        workspacePath: config.workspacePath || '',
     });
     const [localServerHost, setLocalServerHost] = useState(serverHost);
-    const [status, setStatus] = useState<{ type: '' | 'success' | 'error'; message: string }>({
-        type: '',
-        message: '',
-    });
-    const [isSaving, setIsSaving] = useState(false);
 
+    // UI state
+    const [isServerConfigExpanded, setIsServerConfigExpanded] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+    // Sync from context when it changes (initial load)
     useEffect(() => {
         setLocalConfig({
-            geminiKey: config.geminiKey,
-            authToken: config.authToken,
-            workspacePath: config.workspacePath,
+            geminiKey: config.geminiKey || '',
+            authToken: config.authToken || '',
+            workspacePath: config.workspacePath || '',
         });
-    }, [config]);
-
-    useEffect(() => {
         setLocalServerHost(serverHost);
-    }, [serverHost]);
+    }, [config, serverHost]);
 
     const handleSave = async () => {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         setIsSaving(true);
-        setStatus({ type: '', message: '' });
+        setSaveStatus('idle');
 
-        // Update server host if changed
+        // Update server host first if changed
         if (localServerHost !== serverHost) {
             setServerHost(localServerHost);
         }
 
         const success = await saveConfig(localConfig);
 
+        setIsSaving(false);
         if (success) {
+            setSaveStatus('success');
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            setStatus({ type: 'success', message: 'Saved Successfully!' });
-            setTimeout(() => {
-                setStatus({ type: '', message: '' });
-                setIsSaving(false);
-            }, 2000);
+            setTimeout(() => setSaveStatus('idle'), 2000);
         } else {
+            setSaveStatus('error');
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-            setStatus({ type: 'error', message: 'Failed to Save' });
-            setTimeout(() => {
-                setStatus({ type: '', message: '' });
-                setIsSaving(false);
-            }, 3000);
         }
     };
 
-    const getButtonStyle = () => {
-        if (status.type === 'success') return styles.buttonSuccess;
-        if (status.type === 'error') return styles.buttonError;
-        return styles.buttonPrimary;
+    const handleLogout = () => {
+        Alert.alert(
+            "Terminate Session",
+            "Are you sure you want to disconnect from the uplink?",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Terminate",
+                    style: 'destructive',
+                    onPress: () => {
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                        setToken(null);
+                    }
+                }
+            ]
+        );
     };
 
     return (
-        <SafeAreaView style={styles.container} edges={['top']}>
-            <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
+        <ScreenWrapper style="px-4 pt-6">
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
                 {/* Header */}
-                <View style={styles.header}>
-                    <View style={styles.iconContainer}>
-                        <SettingsIcon size={24} color={colors.primary} />
+                <View className="items-center mb-8">
+                    <View className="w-16 h-16 bg-[#171717] rounded-3xl items-center justify-center mb-4 border border-[#262626] shadow-lg shadow-violet-900/10">
+                        <Settings size={32} color="#8b5cf6" />
                     </View>
-                    <View>
-                        <Text style={styles.title}>System Settings</Text>
-                        <Text style={styles.subtitle}>Configure your Antigravity environment</Text>
+                    <Text className="text-white text-2xl font-black tracking-tight">System Configuration</Text>
+                    <Text className="text-neutral-500 text-xs font-bold uppercase tracking-widest mt-1">v1.0.0 (Build 42)</Text>
+                </View>
+
+                {/* Collapsible Server Configuration */}
+                <View className="mb-6">
+                    <View className="bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden">
+                        <TouchableOpacity
+                            className="flex-row items-center justify-between p-5 bg-neutral-900 active:bg-neutral-800"
+                            onPress={() => {
+                                Haptics.selectionAsync();
+                                setIsServerConfigExpanded(!isServerConfigExpanded);
+                            }}
+                            activeOpacity={0.9}
+                        >
+                            <View className="flex-row items-center gap-4">
+                                <View className="w-10 h-10 rounded-2xl bg-violet-900/20 items-center justify-center border border-violet-500/20">
+                                    <Server size={20} color="#a78bfa" />
+                                </View>
+                                <View>
+                                    <Text className="text-white font-bold text-base">Server Configuration</Text>
+                                    <Text className="text-neutral-500 text-xs mt-0.5 font-mono">{localServerHost}</Text>
+                                </View>
+                            </View>
+                            <ChevronDown
+                                size={20}
+                                color="#525252"
+                                style={{ transform: [{ rotate: isServerConfigExpanded ? '180deg' : '0deg' }] }}
+                            />
+                        </TouchableOpacity>
+
+                        {isServerConfigExpanded && (
+                            <View className="px-5 pb-6 pt-2 border-t border-neutral-800 bg-[#0d0d0d]">
+                                {/* Server Address */}
+                                <View className="mb-5">
+                                    <View className="flex-row items-center gap-2 mb-2">
+                                        <Server size={12} color="#737373" />
+                                        <Text className="text-neutral-500 text-[10px] font-bold uppercase tracking-wider">Server Address</Text>
+                                    </View>
+                                    <TextInput
+                                        value={localServerHost}
+                                        onChangeText={setLocalServerHost}
+                                        className="bg-[#171717] text-white p-4 rounded-xl border border-[#262626] font-mono text-sm focus:border-violet-500"
+                                        placeholder="192.168.1.100:8787"
+                                        placeholderTextColor="#404040"
+                                        autoCapitalize="none"
+                                        keyboardType="url"
+                                        autoCorrect={false}
+                                    />
+                                </View>
+
+                                {/* Gemini API Key */}
+                                <View className="mb-5">
+                                    <View className="flex-row items-center gap-2 mb-2">
+                                        <Key size={12} color="#737373" />
+                                        <Text className="text-neutral-500 text-[10px] font-bold uppercase tracking-wider">Gemini API Key</Text>
+                                    </View>
+                                    <TextInput
+                                        value={localConfig.geminiKey}
+                                        onChangeText={(text) => setLocalConfig(prev => ({ ...prev, geminiKey: text }))}
+                                        className="bg-[#171717] text-white p-4 rounded-xl border border-[#262626] font-mono text-sm focus:border-violet-500"
+                                        placeholder="Enter API Key..."
+                                        placeholderTextColor="#404040"
+                                        secureTextEntry
+                                        autoCapitalize="none"
+                                    />
+                                </View>
+
+                                {/* Workspace Path */}
+                                <View className="mb-6">
+                                    <View className="flex-row items-center gap-2 mb-2">
+                                        <Folder size={12} color="#737373" />
+                                        <Text className="text-neutral-500 text-[10px] font-bold uppercase tracking-wider">Workspace Path</Text>
+                                    </View>
+                                    <TextInput
+                                        value={localConfig.workspacePath}
+                                        onChangeText={(text) => setLocalConfig(prev => ({ ...prev, workspacePath: text }))}
+                                        className="bg-[#171717] text-white p-4 rounded-xl border border-[#262626] font-mono text-sm focus:border-violet-500"
+                                        placeholder="/path/to/projects"
+                                        placeholderTextColor="#404040"
+                                        autoCapitalize="none"
+                                        autoCorrect={false}
+                                    />
+                                </View>
+
+                                {/* Update Button */}
+                                <TouchableOpacity
+                                    onPress={handleSave}
+                                    disabled={isSaving}
+                                    className={`w-full py-4 rounded-xl items-center justify-center flex-row gap-2 ${saveStatus === 'success' ? 'bg-green-600' :
+                                            saveStatus === 'error' ? 'bg-red-600' :
+                                                'bg-violet-600 active:bg-violet-700'
+                                        }`}
+                                >
+                                    {isSaving ? (
+                                        <ActivityIndicator color="white" size="small" />
+                                    ) : saveStatus === 'success' ? (
+                                        <>
+                                            <Check size={18} color="white" />
+                                            <Text className="text-white font-bold uppercase tracking-wider text-xs">Saved</Text>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Save size={18} color="white" />
+                                            <Text className="text-white font-bold uppercase tracking-wider text-xs">Update Settings</Text>
+                                        </>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        )}
                     </View>
                 </View>
 
-                {/* Form */}
-                <View style={styles.form}>
-                    {/* Server Host */}
-                    <View style={styles.field}>
-                        <View style={styles.labelRow}>
-                            <Server size={12} color={colors.textDim} />
-                            <Text style={styles.label}>SERVER ADDRESS</Text>
-                        </View>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="192.168.1.100:8787"
-                            placeholderTextColor={colors.textDim + '50'}
-                            value={localServerHost}
-                            onChangeText={setLocalServerHost}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            keyboardType="url"
-                        />
-                        <Text style={styles.hint}>Your Mac's LAN or Tailscale IP address</Text>
-                    </View>
+                {/* Preferences Section */}
+                <View className="mb-8">
+                    <Text className="text-neutral-500 text-xs font-bold uppercase tracking-wider mb-3 pl-1">Preferences</Text>
 
-                    {/* Gemini API Key */}
-                    <View style={styles.field}>
-                        <View style={styles.labelRow}>
-                            <Key size={12} color={colors.textDim} />
-                            <Text style={styles.label}>GEMINI API KEY</Text>
-                        </View>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Enter your Gemini API Key..."
-                            placeholderTextColor={colors.textDim + '50'}
-                            secureTextEntry
-                            value={localConfig.geminiKey}
-                            onChangeText={(text) => setLocalConfig({ ...localConfig, geminiKey: text })}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
-                        <Text style={styles.hint}>Used for agent intelligence. Supports Gemini 1.5 & 2.0.</Text>
-                    </View>
-
-                    {/* Auth Token */}
-                    <View style={styles.field}>
-                        <View style={styles.labelRow}>
-                            <Lock size={12} color={colors.textDim} />
-                            <Text style={styles.label}>ACCESS TOKEN (PASSWORD)</Text>
-                        </View>
-                        <TextInput
-                            style={styles.input}
-                            value={localConfig.authToken}
-                            onChangeText={(text) => setLocalConfig({ ...localConfig, authToken: text })}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
-                        <Text style={styles.hint}>The password required to connect to this controller.</Text>
-                    </View>
-
-                    {/* Workspace Directory */}
-                    <View style={styles.field}>
-                        <View style={styles.labelRow}>
-                            <Folder size={12} color={colors.textDim} />
-                            <Text style={styles.label}>WORKSPACE DIRECTORY</Text>
-                        </View>
-                        <TextInput
-                            style={styles.input}
-                            value={localConfig.workspacePath}
-                            onChangeText={(text) => setLocalConfig({ ...localConfig, workspacePath: text })}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
-                        <Text style={styles.hint}>The root folder where your projects are located.</Text>
+                    <View className="bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden">
+                        <SettingItem icon={Bell} label="Notifications" value="On" />
+                        <View className="h-[1px] bg-neutral-800 ml-16" />
+                        <SettingItem icon={Shield} label="Security" subtitle="Access tokens & encryption" />
+                        <View className="h-[1px] bg-neutral-800 ml-16" />
+                        <SettingItem icon={CircleHelp} label="Support" subtitle="Documentation & help" />
                     </View>
                 </View>
 
-                {/* Save Button */}
+                {/* Logout Button */}
                 <TouchableOpacity
-                    style={[styles.button, getButtonStyle()]}
-                    onPress={handleSave}
-                    disabled={isSaving || status.type === 'success'}
-                    activeOpacity={0.8}
+                    onPress={handleLogout}
+                    className="w-full bg-red-500/10 border border-red-500/20 py-5 rounded-2xl items-center justify-center flex-row gap-2 active:bg-red-500/20"
                 >
-                    {status.type === 'success' ? (
-                        <>
-                            <CheckCircle2 size={18} color={colors.text} />
-                            <Text style={styles.buttonText}>Saved Successfully!</Text>
-                        </>
-                    ) : status.type === 'error' ? (
-                        <>
-                            <AlertCircle size={18} color={colors.text} />
-                            <Text style={styles.buttonText}>Failed to Save</Text>
-                        </>
-                    ) : isSaving ? (
-                        <>
-                            <ActivityIndicator size="small" color={colors.text} />
-                            <Text style={styles.buttonText}>Saving Changes...</Text>
-                        </>
-                    ) : (
-                        <>
-                            <Save size={18} color={colors.text} />
-                            <Text style={styles.buttonText}>Save Configuration</Text>
-                        </>
-                    )}
+                    <LogOut size={18} color="#ef4444" />
+                    <Text className="text-red-500 font-bold uppercase tracking-widest text-xs">Terminate Session</Text>
                 </TouchableOpacity>
 
-                {/* Note */}
-                <View style={styles.noteCard}>
-                    <Text style={styles.noteText}>
-                        <Text style={styles.noteBold}>Note: </Text>
-                        Updating the Access Token will immediately end your current session and require you to re-log in with the new password.
-                    </Text>
+                <View className="items-center mt-8 opacity-50">
+                    <Text className="text-neutral-600 text-[10px] font-bold uppercase tracking-[0.2em]">Antigravity Mobile</Text>
                 </View>
             </ScrollView>
-        </SafeAreaView>
+        </ScreenWrapper>
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.bg,
-    },
-    scrollView: {
-        flex: 1,
-    },
-    content: {
-        padding: spacing.lg,
-        paddingBottom: 120, // Tab bar space
-        gap: spacing.xl,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.md,
-        paddingBottom: spacing.lg,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    iconContainer: {
-        width: 48,
-        height: 48,
-        borderRadius: borderRadius.lg,
-        backgroundColor: colors.primary + '20',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    title: {
-        fontSize: 24,
-        fontWeight: '900',
-        color: colors.text,
-    },
-    subtitle: {
-        fontSize: 14,
-        color: colors.textDim,
-    },
-    form: {
-        gap: spacing.lg,
-    },
-    field: {
-        gap: spacing.sm,
-    },
-    labelRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-        marginLeft: spacing.xs,
-    },
-    label: {
-        fontSize: 11,
-        fontWeight: '900',
-        color: colors.textDim,
-        letterSpacing: 1,
-    },
-    input: {
-        backgroundColor: colors.surfaceHighlight + '80',
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: borderRadius.lg,
-        paddingVertical: spacing.md,
-        paddingHorizontal: spacing.lg,
-        fontSize: 15,
-        color: colors.text,
-    },
-    hint: {
-        fontSize: 10,
-        color: colors.textDim,
-        fontStyle: 'italic',
-        marginLeft: spacing.xs,
-        opacity: 0.6,
-    },
-    button: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: spacing.sm,
-        paddingVertical: spacing.md,
-        borderRadius: borderRadius.lg,
-    },
-    buttonPrimary: {
-        backgroundColor: colors.primary,
-    },
-    buttonSuccess: {
-        backgroundColor: colors.success,
-    },
-    buttonError: {
-        backgroundColor: colors.error,
-    },
-    buttonText: {
-        fontSize: 14,
-        fontWeight: '900',
-        color: colors.text,
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-    },
-    noteCard: {
-        padding: spacing.md,
-        backgroundColor: colors.primary + '10',
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.primary + '20',
-    },
-    noteText: {
-        fontSize: 11,
-        color: colors.primary,
-        lineHeight: 16,
-    },
-    noteBold: {
-        fontWeight: '900',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-    },
-});
+const SettingItem = ({ icon: Icon, label, value, subtitle }: any) => (
+    <TouchableOpacity
+        className="flex-row items-center justify-between p-5 bg-neutral-900 active:bg-neutral-800"
+        onPress={() => Haptics.selectionAsync()}
+    >
+        <View className="flex-row items-center gap-4">
+            <View className="w-10 h-10 rounded-2xl bg-neutral-800 items-center justify-center border border-neutral-700">
+                <Icon size={20} color="#a3a3a3" />
+            </View>
+            <View>
+                <Text className="text-white font-bold text-base">{label}</Text>
+                {subtitle && <Text className="text-neutral-500 text-xs mt-0.5">{subtitle}</Text>}
+            </View>
+        </View>
+        <View className="flex-row items-center gap-3">
+            {value && <Text className="text-neutral-500 font-medium">{value}</Text>}
+            <ChevronRight size={16} color="#525252" />
+        </View>
+    </TouchableOpacity>
+);

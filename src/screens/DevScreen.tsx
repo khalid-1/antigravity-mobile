@@ -1,445 +1,179 @@
 import React, { useState, useRef, useEffect } from 'react';
-import {
-    View,
-    Text,
-    TouchableOpacity,
-    FlatList,
-    Modal,
-    StyleSheet,
-    Image,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, TouchableOpacity, FlatList, Modal, ScrollView } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { Play, Square, ExternalLink, ChevronDown, CheckCircle2, Folder } from 'lucide-react-native';
+import { Play, Square, Trash2, ChevronDown, Folder, Terminal, X, Check } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
-import { colors, borderRadius, spacing } from '../theme/colors';
-
-interface TerminalLine {
-    line: string;
-    isError: boolean;
-}
+import ScreenWrapper from '../components/ScreenWrapper';
 
 export default function DevScreen() {
-    const { terminalOutput, clearTerminal, projects, activeProject, setActiveProject, api, isConnected } = useApp();
-    const [showProjectPicker, setShowProjectPicker] = useState(false);
+    const { terminalOutput, projects, activeProject, setActiveProject, isConnected, api, clearTerminal } = useApp();
+    const [isRunning, setIsRunning] = useState(false);
+    const [showProjectSelector, setShowProjectSelector] = useState(false);
     const flatListRef = useRef<FlatList>(null);
+
+    const handleToggleProject = async () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        if (!activeProject) return;
+
+        const endpoint = isRunning ? '/project/stop' : '/project/start';
+        setIsRunning(!isRunning);
+
+        try {
+            await api(endpoint, 'POST', { projectId: activeProject });
+        } catch (e) {
+            setIsRunning(!isRunning);
+            console.error("Failed to toggle project", e);
+        }
+    };
 
     useEffect(() => {
         if (terminalOutput.length > 0) {
-            flatListRef.current?.scrollToEnd({ animated: true });
+            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
         }
     }, [terminalOutput]);
 
-    const handleStart = async () => {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        if (activeProject) await api('/dev/start', 'POST', { id: activeProject });
+    const activeProj = projects.find(p => p.id === activeProject);
+
+    const handleSelectProject = (projectId: string) => {
+        setActiveProject(projectId);
+        setShowProjectSelector(false);
+        Haptics.selectionAsync();
     };
 
-    const handleStop = async () => {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        if (activeProject) await api('/dev/stop', 'POST', { id: activeProject });
+    const handleClearTerminal = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        clearTerminal();
     };
-
-    const activeProjectData = projects.find(p => p.id === activeProject);
 
     return (
-        <SafeAreaView style={styles.container} edges={['top']}>
+        <ScreenWrapper style="px-4 pt-6 pb-0">
             {/* Header */}
-            <View style={styles.header}>
-                <Image source={require('../../assets/icon.png')} style={styles.headerLogo} />
-                <View>
-                    <Text style={styles.headerTitle}>DEV CONSOLE</Text>
-                    <View style={styles.statusRow}>
-                        <View style={[styles.statusDot, { backgroundColor: isConnected ? colors.success : colors.error }]} />
-                        <Text style={styles.statusText}>{isConnected ? 'CONNECTED' : 'OFFLINE'}</Text>
-                    </View>
+            <View className="flex-row justify-between items-center mb-6 px-2">
+                <View className="flex-row items-center gap-2">
+                    <Terminal size={18} color="#a3a3a3" />
+                    <Text className="text-white font-bold text-lg tracking-tight">Dev Console</Text>
+                </View>
+                <View className={`px-2.5 py-0.5 rounded-full border ${isConnected ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
+                    <Text className={`text-[10px] font-bold tracking-wider ${isConnected ? 'text-emerald-500' : 'text-red-500'}`}>
+                        {isConnected ? 'ONLINE' : 'OFFLINE'}
+                    </Text>
                 </View>
             </View>
 
-            <View style={styles.content}>
-                {/* Project Selector */}
-                <TouchableOpacity
-                    style={styles.projectSelector}
-                    onPress={() => {
-                        Haptics.selectionAsync();
-                        setShowProjectPicker(true);
-                    }}
-                >
-                    <View style={styles.projectSelectorLeft}>
-                        <Folder size={20} color={colors.primary} />
-                        <View>
-                            <Text style={styles.projectLabel}>TARGET PROJECT</Text>
-                            <Text style={styles.projectName}>
-                                {activeProjectData?.name || 'Select a project...'}
-                            </Text>
-                        </View>
-                    </View>
-                    <ChevronDown size={20} color={colors.textDim} />
-                </TouchableOpacity>
-
-                {/* Controls */}
-                <View style={[styles.controlsCard, !activeProject && styles.controlsDisabled]}>
-                    <View style={styles.controlsRow}>
-                        <TouchableOpacity
-                            style={styles.playButton}
-                            onPress={handleStart}
-                            disabled={!activeProject}
-                        >
-                            <Play size={24} color={colors.success} fill={colors.success} />
-                            <Text style={styles.playButtonText}>START</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.stopButton}
-                            onPress={handleStop}
-                            disabled={!activeProject}
-                        >
-                            <Square size={24} color={colors.error} fill={colors.error} />
-                            <Text style={styles.stopButtonText}>STOP</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.linkButton} disabled={!activeProject}>
-                            <ExternalLink size={20} color={colors.textDim} />
-                        </TouchableOpacity>
-                    </View>
-                </View>
-
-                {/* Terminal */}
-                <View style={styles.terminal}>
-                    <View style={styles.terminalHeader}>
-                        <View style={styles.trafficLights}>
-                            <View style={[styles.trafficLight, { backgroundColor: '#FF5F56' }]} />
-                            <View style={[styles.trafficLight, { backgroundColor: '#FFBD2E' }]} />
-                            <View style={[styles.trafficLight, { backgroundColor: '#27C93F' }]} />
-                        </View>
-                        <Text style={styles.terminalTitle}>terminal</Text>
-                        <TouchableOpacity
-                            style={styles.clearButton}
-                            onPress={() => {
-                                Haptics.selectionAsync();
-                                clearTerminal();
-                            }}
-                        >
-                            <Text style={styles.clearButtonText}>CLEAR</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    <FlatList
-                        ref={flatListRef}
-                        data={terminalOutput as TerminalLine[]}
-                        keyExtractor={(_, index) => index.toString()}
-                        style={styles.terminalOutput}
-                        contentContainerStyle={styles.terminalContent}
-                        renderItem={({ item }) => (
-                            <Text style={[styles.terminalText, item.isError && styles.terminalError]}>
-                                {item.line}
-                            </Text>
-                        )}
-                        ListEmptyComponent={
-                            <Text style={styles.terminalPlaceholder}>$ waiting for output...</Text>
-                        }
-                    />
-                </View>
-            </View>
-
-            {/* Project Picker Modal */}
-            <Modal
-                visible={showProjectPicker}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowProjectPicker(false)}
+            {/* Project Card */}
+            <TouchableOpacity 
+                onPress={() => {
+                    Haptics.selectionAsync();
+                    setShowProjectSelector(true);
+                }}
+                className="w-full bg-neutral-900 border border-neutral-800 rounded-2xl p-4 mb-4 flex-row justify-between items-center active:bg-neutral-800"
             >
-                <TouchableOpacity
-                    style={styles.modalOverlay}
-                    activeOpacity={1}
-                    onPress={() => setShowProjectPicker(false)}
-                >
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>SELECT PROJECT</Text>
-                        {projects.length === 0 ? (
-                            <Text style={styles.noProjects}>No projects found</Text>
-                        ) : (
-                            projects.map((p) => (
-                                <TouchableOpacity
-                                    key={p.id}
-                                    style={[styles.projectOption, activeProject === p.id && styles.projectOptionActive]}
-                                    onPress={() => {
-                                        Haptics.selectionAsync();
-                                        setActiveProject(p.id);
-                                        setShowProjectPicker(false);
-                                    }}
+                <View className="flex-row items-center">
+                    <View className="w-10 h-10 bg-violet-500/10 rounded-xl items-center justify-center mr-3">
+                        <Folder size={20} color="#8b5cf6" />
+                    </View>
+                    <View>
+                        <Text className="text-neutral-500 text-[10px] font-bold tracking-wider uppercase">Target Project</Text>
+                        <Text className="text-white font-bold text-sm">{activeProj?.name || 'Select Project'}</Text>
+                    </View>
+                </View>
+                <ChevronDown size={20} color="#525252" />
+            </TouchableOpacity>
+
+            {/* Project Selector Modal */}
+            <Modal visible={showProjectSelector} transparent={true} animationType="fade">
+                <TouchableOpacity activeOpacity={1} onPress={() => setShowProjectSelector(false)} className="flex-1 bg-black/80 justify-center px-6">
+                    <View className="bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden">
+                        <View className="flex-row justify-between items-center p-5 border-b border-neutral-800">
+                            <Text className="text-white font-bold text-lg">Select Project</Text>
+                            <TouchableOpacity onPress={() => setShowProjectSelector(false)}>
+                                <X size={20} color="#737373" />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView className="max-h-80 p-4">
+                            {projects.map(item => (
+                                <TouchableOpacity 
+                                    key={item.id}
+                                    onPress={() => handleSelectProject(item.id)}
+                                    className={`p-4 rounded-xl mb-2 flex-row items-center justify-between ${activeProject === item.id ? 'bg-violet-600' : 'bg-neutral-800'}`}
                                 >
-                                    <View style={styles.projectOptionIcon}>
-                                        <Folder size={16} color={activeProject === p.id ? colors.primary : colors.textDim} />
+                                    <View className="flex-row items-center gap-3">
+                                        <Folder size={18} color={activeProject === item.id ? 'white' : '#a3a3a3'} />
+                                        <Text className={`font-bold ${activeProject === item.id ? 'text-white' : 'text-neutral-400'}`}>
+                                            {item.name}
+                                        </Text>
                                     </View>
-                                    <Text style={[styles.projectOptionText, activeProject === p.id && styles.projectOptionTextActive]}>
-                                        {p.name}
-                                    </Text>
-                                    {activeProject === p.id && <CheckCircle2 size={16} color={colors.primary} />}
+                                    {activeProject === item.id && <Check size={16} color="white" />}
                                 </TouchableOpacity>
-                            ))
-                        )}
+                            ))}
+                            {projects.length === 0 && (
+                                <Text className="text-neutral-500 text-center py-4">No projects found. Check configuration.</Text>
+                            )}
+                        </ScrollView>
                     </View>
                 </TouchableOpacity>
             </Modal>
-        </SafeAreaView>
+
+            {/* Controls */}
+            <View className="flex-row gap-3 mb-6">
+                <TouchableOpacity 
+                    onPress={handleToggleProject}
+                    disabled={isRunning || !activeProject}
+                    className={`flex-1 flex-row items-center justify-center py-3.5 rounded-xl gap-2 ${
+                        isRunning || !activeProject ? 'bg-neutral-900 opacity-50' : 'bg-emerald-500/10 border border-emerald-500/20'
+                    }`}
+                >
+                    <Play size={16} color="#10b981" fill={isRunning ? 'transparent' : "#10b981"} />
+                    <Text className={`font-bold text-xs tracking-wider ${isRunning || !activeProject ? 'text-neutral-600' : 'text-emerald-500'}`}>START</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                     onPress={handleToggleProject}
+                     disabled={!isRunning}
+                     className={`flex-1 flex-row items-center justify-center py-3.5 rounded-xl gap-2 ${
+                        !isRunning ? 'bg-neutral-900 opacity-50' : 'bg-red-500/10 border border-red-500/20'
+                    }`}
+                >
+                    <Square size={16} color="#ef4444" fill={!isRunning ? 'transparent' : "#ef4444"} />
+                    <Text className={`font-bold text-xs tracking-wider ${!isRunning ? 'text-neutral-600' : 'text-red-500'}`}>STOP</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                    onPress={handleClearTerminal}
+                    className="w-12 items-center justify-center bg-neutral-900 border border-neutral-800 rounded-xl"
+                >
+                    <Trash2 size={18} color="#a3a3a3" />
+                </TouchableOpacity>
+            </View>
+
+            {/* Terminal Window */}
+            <View className="flex-1 bg-[#0d0d0d] rounded-t-3xl border-t border-x border-neutral-800 overflow-hidden">
+                <View className="bg-[#171717] px-4 py-2.5 flex-row justify-between items-center border-b border-black">
+                    <View className="flex-row gap-2">
+                        <View className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]" />
+                        <View className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]" />
+                        <View className="w-2.5 h-2.5 rounded-full bg-[#27c93f]" />
+                    </View>
+                    <Text className="text-neutral-500 text-[10px] font-mono">bash — 80x24</Text>
+                    <View className="w-10" />
+                </View>
+                
+                <FlatList
+                    ref={flatListRef}
+                    data={terminalOutput}
+                    keyExtractor={(_, i) => i.toString()}
+                    contentContainerStyle={{ padding: 16 }}
+                    renderItem={({ item }) => (
+                        <Text className={`font-mono text-xs mb-1 ${item.isError ? 'text-red-400' : 'text-neutral-400'}`}>
+                            <Text className="opacity-50">$ </Text>
+                            {item.line}
+                        </Text>
+                    )}
+                    ListEmptyComponent={
+                        <Text className="text-neutral-700 font-mono text-xs italic">Terminal output will appear here...</Text>
+                    }
+                />
+            </View>
+        </ScreenWrapper>
     );
 }
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.bg,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-        paddingHorizontal: spacing.md,
-        paddingVertical: spacing.md,
-    },
-    headerLogo: {
-        width: 32,
-        height: 32,
-        resizeMode: 'contain',
-    },
-    headerTitle: {
-        fontSize: 12,
-        fontWeight: '900',
-        color: colors.text,
-        letterSpacing: 2,
-    },
-    statusRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    statusDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-    },
-    statusText: {
-        fontSize: 9,
-        fontWeight: '700',
-        color: colors.textDim,
-        letterSpacing: 1,
-    },
-    content: {
-        flex: 1,
-        padding: spacing.md,
-        gap: spacing.md,
-    },
-    projectSelector: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: spacing.md,
-        backgroundColor: colors.surface,
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    projectSelectorLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-    },
-    projectLabel: {
-        fontSize: 9,
-        fontWeight: '800',
-        color: colors.textDim,
-        letterSpacing: 1,
-    },
-    projectName: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: colors.text,
-    },
-    controlsCard: {
-        padding: spacing.md,
-        backgroundColor: colors.surface,
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    controlsDisabled: {
-        opacity: 0.5,
-    },
-    controlsRow: {
-        flexDirection: 'row',
-        gap: spacing.sm,
-    },
-    playButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: spacing.sm,
-        padding: spacing.md,
-        backgroundColor: colors.success + '15',
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.success + '30',
-    },
-    playButtonText: {
-        fontSize: 12,
-        fontWeight: '800',
-        color: colors.success,
-        letterSpacing: 1,
-    },
-    stopButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: spacing.sm,
-        padding: spacing.md,
-        backgroundColor: colors.error + '15',
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.error + '30',
-    },
-    stopButtonText: {
-        fontSize: 12,
-        fontWeight: '800',
-        color: colors.error,
-        letterSpacing: 1,
-    },
-    linkButton: {
-        padding: spacing.md,
-        backgroundColor: colors.surfaceHighlight,
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.border,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    terminal: {
-        flex: 1,
-        backgroundColor: '#0d0d0d',
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.border,
-        overflow: 'hidden',
-    },
-    terminalHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: spacing.md,
-        paddingVertical: spacing.sm,
-        backgroundColor: '#1a1a1a',
-        borderBottomWidth: 1,
-        borderBottomColor: '#000',
-    },
-    trafficLights: {
-        flexDirection: 'row',
-        gap: spacing.xs,
-    },
-    trafficLight: {
-        width: 10,
-        height: 10,
-        borderRadius: 5,
-    },
-    terminalTitle: {
-        flex: 1,
-        fontSize: 11,
-        fontWeight: '600',
-        color: colors.textDim,
-        marginLeft: spacing.md,
-    },
-    clearButton: {
-        paddingHorizontal: spacing.sm,
-        paddingVertical: spacing.xs,
-        borderRadius: borderRadius.sm,
-        backgroundColor: colors.surfaceHighlight,
-    },
-    clearButtonText: {
-        fontSize: 9,
-        fontWeight: '700',
-        color: colors.textDim,
-        letterSpacing: 1,
-    },
-    terminalOutput: {
-        flex: 1,
-    },
-    terminalContent: {
-        padding: spacing.md,
-        gap: 2,
-    },
-    terminalText: {
-        fontSize: 11,
-        fontFamily: 'monospace',
-        color: colors.textDim,
-        lineHeight: 16,
-    },
-    terminalError: {
-        color: colors.error,
-    },
-    terminalPlaceholder: {
-        fontSize: 11,
-        fontFamily: 'monospace',
-        color: colors.textDim,
-        opacity: 0.4,
-    },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: spacing.lg,
-    },
-    modalContent: {
-        width: '100%',
-        maxWidth: 320,
-        backgroundColor: colors.surfaceHighlight,
-        borderRadius: borderRadius.xl,
-        padding: spacing.md,
-        borderWidth: 1,
-        borderColor: colors.border,
-        gap: spacing.xs,
-    },
-    modalTitle: {
-        fontSize: 10,
-        fontWeight: '900',
-        color: colors.textDim,
-        textAlign: 'center',
-        marginBottom: spacing.sm,
-        letterSpacing: 2,
-    },
-    noProjects: {
-        fontSize: 14,
-        color: colors.textDim,
-        textAlign: 'center',
-        padding: spacing.lg,
-    },
-    projectOption: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-        padding: spacing.md,
-        borderRadius: borderRadius.lg,
-        backgroundColor: colors.surface,
-    },
-    projectOptionActive: {
-        backgroundColor: colors.primary + '15',
-        borderWidth: 1,
-        borderColor: colors.primary + '30',
-    },
-    projectOptionIcon: {
-        width: 32,
-        height: 32,
-        borderRadius: borderRadius.md,
-        backgroundColor: colors.surfaceHighlight,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    projectOptionText: {
-        flex: 1,
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textDim,
-    },
-    projectOptionTextActive: {
-        color: colors.primary,
-        fontWeight: '800',
-    },
-});

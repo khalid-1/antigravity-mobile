@@ -1,214 +1,186 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    FlatList,
-    Modal,
-    StyleSheet,
-    KeyboardAvoidingView,
-    Platform,
-    Keyboard,
+    View, Text, TextInput, TouchableOpacity, FlatList,
+    KeyboardAvoidingView, Platform, Keyboard, Modal,
+    StyleSheet, ActivityIndicator, Alert, ScrollView
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useApp } from '../context/AppContext';
+import {
+    Send, Paperclip, Plus, Zap, X, ChevronDown, Check,
+    Square, ChevronRight, Folder, Globe
+} from 'lucide-react-native';
+import Markdown from 'react-native-markdown-display';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
-import {
-    Send,
-    Paperclip,
-    Plus,
-    MessageSquare,
-    History,
-    X,
-    ChevronDown,
-    ChevronRight,
-    CheckCircle2,
-    Trash2,
-    Square,
-} from 'lucide-react-native';
-import { Image } from 'react-native';
-import Markdown from 'react-native-markdown-display';
-import { useApp } from '../context/AppContext';
-import { colors, borderRadius, spacing } from '../theme/colors';
+import * as ImagePicker from 'expo-image-picker';
 
-interface ChatMessage {
-    role: 'user' | 'bot';
-    content: string;
-    isAction?: boolean;
-    file?: { name: string };
-}
+/**
+ * IMPORTANT: This screen uses React Native's StyleSheet instead of NativeWind.
+ * 
+ * DO NOT convert this to NativeWind/className styling!
+ * 
+ * NativeWind causes a "Couldn't find navigation context" crash when typing
+ * in the TextInput. This is a known compatibility issue between NativeWind's
+ * styling engine and React Navigation during re-renders.
+ * 
+ * The fix is to use StyleSheet.create() for all styling in this component.
+ */
 
 export default function ChatScreen() {
+    const insets = useSafeAreaInsets();
     const {
-        chatHistory,
-        setChatHistory,
-        isConnected,
-        api,
-        projects,
-        activeProject,
-        setActiveProject,
-        newChat,
-        savedChats,
-        loadChat,
+        chatHistory, setChatHistory, api, activeProject, setActiveProject,
+        activeModel, setActiveModel, models, isConnected, isThinking,
+        stopGeneration, toggleMessageExpanded, projects, newChat
     } = useApp();
 
     const [input, setInput] = useState('');
     const [isSending, setIsSending] = useState(false);
     const [selectedFile, setSelectedFile] = useState<{ name: string; uri: string; type: string } | null>(null);
-    const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-    const [model, setModel] = useState('gemini-3-flash-preview');
-    const [showModelPicker, setShowModelPicker] = useState(false);
-
-    const availableModels = [
-        { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro' },
-        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash' },
-        { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash' },
-    ];
-
-    const [confirmModal, setConfirmModal] = useState<{
-        title: string;
-        message: string;
-        onConfirm: () => void;
-    } | null>(null);
-
+    const [showModelSelector, setShowModelSelector] = useState(false);
+    const [showProjectSelector, setShowProjectSelector] = useState(false);
     const flatListRef = useRef<FlatList>(null);
-    const insets = useSafeAreaInsets();
 
-    // Scroll to bottom when new messages arrive
     useEffect(() => {
         if (chatHistory.length > 0) {
-            setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: true });
-            }, 100);
+            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
         }
     }, [chatHistory]);
 
-    const handleStop = async () => {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        setIsSending(false);
-        await api('/chat/stop', 'POST', { projectId: activeProject });
-    };
-
-    const handleLoadChat = async (id: string) => {
-        await Haptics.selectionAsync();
-        setIsHistoryOpen(false);
-        await loadChat(id);
-    };
-
-    const handleDeleteChat = async (id: string) => {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        await api(`/chats/${id}`, 'DELETE');
-    };
-
-    const handleFilePick = async () => {
-        try {
-            const result = await DocumentPicker.getDocumentAsync({
-                type: '*/*',
-            });
-            if (!result.canceled && result.assets[0]) {
-                const file = result.assets[0];
-                setSelectedFile({
-                    name: file.name,
-                    uri: file.uri,
-                    type: file.mimeType || 'application/octet-stream',
-                });
-            }
-        } catch (err) {
-            console.error('File pick error:', err);
-        }
-    };
-
     const handleSend = async () => {
-        if ((!input.trim() && !selectedFile) || isSending) return;
-
+        if ((!input.trim() && !selectedFile) || isSending || isThinking) return;
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-        // Slash commands
-        if (input.trim().toLowerCase() === '/undo') {
-            setConfirmModal({
-                title: 'Undo Action?',
-                message: 'This will attempt to revert the last changes made by the agent.',
-                onConfirm: async () => {
-                    setInput('');
-                    await api('/chat/send', 'POST', {
-                        message: 'Undo the last changes you made. Revert the files.',
-                        projectId: activeProject,
-                        modelId: model,
-                    });
-                },
-            });
-            return;
-        }
-
-        if (input.trim().toLowerCase() === '/stop') {
-            setInput('');
-            handleStop();
-            return;
-        }
-
-        setIsSending(true);
         Keyboard.dismiss();
+        setIsSending(true);
 
-        const currentMsg = input;
-        const currentFile = selectedFile;
+        const msg = input;
+        const file = selectedFile;
 
-        // Optimistic update
-        setChatHistory((prev: ChatMessage[]) => [
-            ...prev,
-            {
-                role: 'user',
-                content: currentMsg,
-                file: currentFile ? { name: currentFile.name } : undefined,
-            },
-        ]);
-
+        setChatHistory((prev: any[]) => [...prev, { role: 'user', content: msg, file: file ? { name: file.name } : undefined }]);
         setInput('');
         setSelectedFile(null);
 
         try {
-            // TODO: Add file upload support with base64 encoding
-            await api('/chat/send', 'POST', {
-                message: currentMsg,
-                projectId: activeProject,
-                modelId: model,
-            });
-        } catch (err) {
-            console.error('[ChatScreen] Send failed:', err);
-            setChatHistory((prev: ChatMessage[]) => [
-                ...prev,
-                { role: 'bot', content: '_Error: Failed to send message. Please try again._ ⚠️' },
-            ]);
+            await api('/chat/send', 'POST', { message: msg, projectId: activeProject, model: activeModel });
+        } catch (e) {
+            setChatHistory((prev: any[]) => [...prev, { role: 'bot', content: '_Error sending message_' }]);
         } finally {
             setIsSending(false);
         }
     };
 
-    // Determine status
-    const lastMsg = chatHistory[chatHistory.length - 1] as ChatMessage | undefined;
-    let agentStatus: string | null = null;
-    if (isSending || (lastMsg && lastMsg.role === 'user')) {
-        agentStatus = 'Thinking...';
-    } else if (lastMsg && lastMsg.role === 'bot' && lastMsg.isAction) {
-        agentStatus = 'Running...';
-    }
+    const handleNewChat = async () => {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        await newChat();
+    };
 
-    const renderMessage = ({ item, index }: { item: ChatMessage; index: number }) => {
+    const handleStop = async () => {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        await stopGeneration();
+    };
+
+    const handleFilePick = async () => {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        Alert.alert(
+            "Select Attachment",
+            "Choose a source",
+            [
+                { text: "Photo Library", onPress: pickImage },
+                { text: "Files", onPress: pickDocument },
+                { text: "Cancel", style: "cancel" }
+            ]
+        );
+    };
+
+    const pickImage = async () => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images', 'videos'],
+                quality: 1,
+            });
+            if (!result.canceled && result.assets[0]) {
+                const asset = result.assets[0];
+                setSelectedFile({
+                    name: asset.fileName || `image_${Date.now()}.jpg`,
+                    uri: asset.uri,
+                    type: asset.mimeType || 'image/jpeg'
+                });
+            }
+        } catch (e) {
+            console.log('Error picking image:', e);
+        }
+    };
+
+    const pickDocument = async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+            if (!result.canceled && result.assets[0]) {
+                setSelectedFile({
+                    name: result.assets[0].name,
+                    uri: result.assets[0].uri,
+                    type: result.assets[0].mimeType || 'application/octet-stream'
+                });
+            }
+        } catch (e) {
+            console.log('Error picking document:', e);
+        }
+    };
+
+    const getProjectName = () => {
+        if (!activeProject) return 'General Context';
+        const project = projects.find((p: any) => p.id === activeProject);
+        return project?.name || 'General Context';
+    };
+
+    const renderMessage = ({ item, index }: { item: any; index: number }) => {
+        const isUser = item.role === 'user';
+
+        // Collapsible action bubble
+        if (item.isAction && item.isCollapsible) {
+            return (
+                <TouchableOpacity
+                    onPress={() => toggleMessageExpanded(index)}
+                    style={styles.actionBubble}
+                    activeOpacity={0.7}
+                >
+                    <ChevronRight
+                        size={12}
+                        color="#a78bfa"
+                        style={{ transform: [{ rotate: item.isExpanded ? '90deg' : '0deg' }] }}
+                    />
+                    <Zap size={10} color="#a78bfa" />
+                    <Text style={styles.actionText} numberOfLines={item.isExpanded ? undefined : 1}>
+                        {item.content}
+                    </Text>
+                </TouchableOpacity>
+            );
+        }
+
+        // Regular action (non-collapsible)
         if (item.isAction) {
             return (
-                <View style={styles.actionBadge}>
-                    <Text style={styles.actionText}>⚡ {item.content}</Text>
+                <View style={styles.actionBubble}>
+                    <Zap size={10} color="#a78bfa" />
+                    <Text style={styles.actionText}>{item.content}</Text>
                 </View>
             );
         }
 
-        const isUser = item.role === 'user';
         return (
             <View style={[styles.messageBubble, isUser ? styles.userBubble : styles.botBubble]}>
-                <Markdown
-                    style={isUser ? markdownStylesUser : markdownStylesBot}
-                >
-                    {item.content.length > 800 ? item.content.slice(0, 800) + '...' : item.content}
+                <Markdown style={{
+                    body: { color: isUser ? '#fff' : '#e5e5e5', fontSize: 14 },
+                    code_block: { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 8, padding: 10, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+                    code_inline: { backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 4, padding: 2, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+                    heading1: { color: '#fff', fontWeight: 'bold', marginTop: 8 },
+                    heading2: { color: '#fff', fontWeight: 'bold', marginTop: 6 },
+                    heading3: { color: '#e5e5e5', fontWeight: '600', marginTop: 4 },
+                    bullet_list: { marginLeft: 8 },
+                    ordered_list: { marginLeft: 8 },
+                    link: { color: '#a78bfa' },
+                }}>
+                    {item.content}
                 </Markdown>
                 {item.file && (
                     <View style={styles.fileAttachment}>
@@ -220,705 +192,386 @@ export default function ChatScreen() {
     };
 
     return (
-        <SafeAreaView style={styles.container} edges={['top']}>
+        <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity
-                    style={styles.headerButton}
-                    onPress={() => {
-                        Haptics.selectionAsync();
-                        setIsHistoryOpen(true);
-                    }}
-                >
-                    <History size={20} color={colors.textDim} />
+                <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
+                    <Plus size={18} color="#a3a3a3" />
                 </TouchableOpacity>
 
-                <View style={styles.headerCenter}>
-                    <View style={styles.brandContainer}>
-                        <Image source={require('../../assets/icon.png')} style={styles.brandLogo} />
-                        <View>
-                            <Text style={styles.brandTitle}>ANTIGRAVITY</Text>
-                            <TouchableOpacity
-                                style={styles.modelSelector}
-                                onPress={() => {
-                                    Haptics.selectionAsync();
-                                    setShowModelPicker(true);
-                                }}
-                            >
-                                <Text style={styles.modelSelectorText}>
-                                    {availableModels.find(m => m.id === model)?.name || 'Select Model'}
-                                </Text>
-                                <ChevronDown size={10} color={colors.primary} />
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
+                <TouchableOpacity onPress={() => setShowModelSelector(true)} style={styles.headerCenter}>
+                    <Text style={styles.modelName}>{activeModel}</Text>
+                    <Text style={styles.connectionStatus}>{isConnected ? 'Connected' : 'Offline'}</Text>
+                    <ChevronDown size={12} color="#737373" style={{ marginLeft: 4 }} />
+                </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.newChatButton}
-                    onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setConfirmModal({
-                            title: 'New Conversation',
-                            message: 'Are you sure you want to clear the chat and start fresh?',
-                            onConfirm: newChat,
-                        });
-                    }}
-                >
-                    <Plus size={18} color={colors.primary} strokeWidth={3} />
+                <TouchableOpacity onPress={() => setShowProjectSelector(true)} style={styles.headerButton}>
+                    <Folder size={18} color="#a3a3a3" />
                 </TouchableOpacity>
             </View>
 
-            {/* Model Picker Modal */}
-            <Modal
-                visible={showModelPicker}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowModelPicker(false)}
-            >
-                <TouchableOpacity
-                    style={styles.modalOverlay}
-                    activeOpacity={1}
-                    onPress={() => setShowModelPicker(false)}
-                >
-                    <View style={styles.modelPickerContent}>
-                        <Text style={styles.modelPickerTitle}>SELECT INTELLIGENCE</Text>
-                        {availableModels.map((m) => (
-                            <TouchableOpacity
-                                key={m.id}
-                                style={[styles.modelOption, model === m.id && styles.modelOptionActive]}
-                                onPress={() => {
-                                    Haptics.selectionAsync();
-                                    setModel(m.id);
-                                    setShowModelPicker(false);
-                                }}
-                            >
-                                <Text style={[styles.modelOptionText, model === m.id && styles.modelOptionTextActive]}>
-                                    {m.name}
-                                </Text>
-                                {model === m.id && <CheckCircle2 size={16} color={colors.primary} />}
-                            </TouchableOpacity>
-                        ))}
+            {/* Project Context Bar */}
+            <TouchableOpacity onPress={() => setShowProjectSelector(true)} style={styles.contextBar}>
+                {activeProject ? <Folder size={14} color="#8b5cf6" /> : <Globe size={14} color="#8b5cf6" />}
+                <Text style={styles.contextText}>{getProjectName()}</Text>
+                <ChevronDown size={12} color="#525252" />
+            </TouchableOpacity>
+
+            {/* Model Selector Modal */}
+            <Modal visible={showModelSelector} transparent={true} animationType="fade" onRequestClose={() => setShowModelSelector(false)}>
+                <TouchableOpacity activeOpacity={1} onPress={() => setShowModelSelector(false)} style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Select AI Model</Text>
+                        <ScrollView style={{ maxHeight: 300 }}>
+                            {models.map((model: string) => (
+                                <TouchableOpacity
+                                    key={model}
+                                    onPress={() => {
+                                        setActiveModel(model);
+                                        setShowModelSelector(false);
+                                        Haptics.selectionAsync();
+                                    }}
+                                    style={[styles.modelOption, activeModel === model && styles.modelOptionActive]}
+                                >
+                                    <Text style={[styles.modelOptionText, activeModel === model && styles.modelOptionTextActive]}>{model}</Text>
+                                    {activeModel === model && <Check size={16} color="#8b5cf6" />}
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
                     </View>
                 </TouchableOpacity>
             </Modal>
 
-            {/* Messages */}
+            {/* Project Selector Modal */}
+            <Modal visible={showProjectSelector} transparent={true} animationType="fade" onRequestClose={() => setShowProjectSelector(false)}>
+                <TouchableOpacity activeOpacity={1} onPress={() => setShowProjectSelector(false)} style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Select Context</Text>
+                        <ScrollView style={{ maxHeight: 400 }}>
+                            {/* General Context Option */}
+                            <TouchableOpacity
+                                onPress={() => {
+                                    setActiveProject(null);
+                                    setShowProjectSelector(false);
+                                    Haptics.selectionAsync();
+                                }}
+                                style={[styles.modelOption, !activeProject && styles.modelOptionActive]}
+                            >
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                    <Globe size={16} color={!activeProject ? "#8b5cf6" : "#737373"} />
+                                    <Text style={[styles.modelOptionText, !activeProject && styles.modelOptionTextActive]}>General Context</Text>
+                                </View>
+                                {!activeProject && <Check size={16} color="#8b5cf6" />}
+                            </TouchableOpacity>
+
+                            {/* Project List */}
+                            {projects.map((project: any) => (
+                                <TouchableOpacity
+                                    key={project.id}
+                                    onPress={() => {
+                                        setActiveProject(project.id);
+                                        setShowProjectSelector(false);
+                                        Haptics.selectionAsync();
+                                    }}
+                                    style={[styles.modelOption, activeProject === project.id && styles.modelOptionActive]}
+                                >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                        <Folder size={16} color={activeProject === project.id ? "#8b5cf6" : "#737373"} />
+                                        <Text style={[styles.modelOptionText, activeProject === project.id && styles.modelOptionTextActive]}>{project.name}</Text>
+                                    </View>
+                                    {activeProject === project.id && <Check size={16} color="#8b5cf6" />}
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+
+            {/* Chat List */}
             <FlatList
                 ref={flatListRef}
-                data={chatHistory as ChatMessage[]}
+                data={chatHistory}
                 renderItem={renderMessage}
                 keyExtractor={(_, index) => index.toString()}
-                contentContainerStyle={styles.messageList}
-                showsVerticalScrollIndicator={false}
-                ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                        <Image source={require('../../assets/icon.png')} style={styles.emptyLogo} />
-                        <Text style={styles.emptyTitle}>Antigravity</Text>
-                        <Text style={styles.emptySubtitle}>AWAITING YOUR COMMAND...</Text>
-                    </View>
-                }
+                contentContainerStyle={{ padding: 16, paddingBottom: 20 }}
+                style={{ flex: 1 }}
             />
+
+            {/* Thinking Indicator Bar */}
+            {isThinking && (
+                <View style={styles.thinkingBar}>
+                    <ActivityIndicator size="small" color="#8b5cf6" />
+                    <Text style={styles.thinkingText}>Agent is processing...</Text>
+                    <TouchableOpacity onPress={handleStop} style={styles.stopButton}>
+                        <Square size={12} color="#ef4444" fill="#ef4444" />
+                        <Text style={styles.stopButtonText}>Stop</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             {/* Input Area */}
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                keyboardVerticalOffset={0}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
             >
-                {selectedFile && (
-                    <View style={styles.filePreview}>
-                        <Text style={styles.filePreviewText}>📎 {selectedFile.name}</Text>
-                        <TouchableOpacity onPress={() => setSelectedFile(null)}>
-                            <X size={16} color={colors.textDim} />
-                        </TouchableOpacity>
-                    </View>
-                )}
-
-                <View style={styles.inputContainer}>
-                    <TouchableOpacity style={styles.attachButton} onPress={handleFilePick}>
-                        <Paperclip size={20} color={colors.textDim} />
-                    </TouchableOpacity>
-
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Ask agent... (/undo to revert)"
-                        placeholderTextColor={colors.textDim + '80'}
-                        value={input}
-                        onChangeText={setInput}
-                        multiline
-                        maxLength={4000}
-                    />
-
-                    {agentStatus ? (
-                        <View style={styles.statusContainer}>
-                            <View style={styles.statusBadge}>
-                                <View style={styles.pulsingDot} />
-                                <Text style={styles.statusText}>{agentStatus}</Text>
-                            </View>
-                            <TouchableOpacity style={styles.stopButton} onPress={handleStop}>
-                                <Square size={10} color={colors.error} fill={colors.error} />
+                <View style={[styles.inputArea, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+                    {selectedFile && (
+                        <View style={styles.selectedFileRow}>
+                            <Text style={styles.selectedFileText}>📎 {selectedFile.name}</Text>
+                            <TouchableOpacity onPress={() => setSelectedFile(null)}>
+                                <X size={14} color="white" />
                             </TouchableOpacity>
                         </View>
-                    ) : (
-                        <TouchableOpacity
-                            style={[styles.sendButton, (input.trim() || selectedFile) && styles.sendButtonActive]}
-                            onPress={handleSend}
-                            disabled={isSending || (!input.trim() && !selectedFile)}
-                        >
-                            <Send size={20} color={input.trim() || selectedFile ? colors.text : colors.textDim} />
-                        </TouchableOpacity>
                     )}
+                    <View style={styles.inputRow}>
+                        <TouchableOpacity onPress={handleFilePick} style={styles.inputButton}>
+                            <Paperclip size={20} color="#737373" />
+                        </TouchableOpacity>
+
+                        <TextInput
+                            style={styles.textInput}
+                            placeholder="Ask agent..."
+                            placeholderTextColor="#525252"
+                            multiline
+                            value={input}
+                            onChangeText={setInput}
+                        />
+
+                        <TouchableOpacity
+                            onPress={handleSend}
+                            disabled={(!input && !selectedFile) || isThinking}
+                            style={[
+                                styles.sendButton,
+                                (input || selectedFile) && !isThinking && styles.sendButtonActive
+                            ]}
+                        >
+                            <Send size={18} color={(input || selectedFile) && !isThinking ? 'white' : '#525252'} />
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </KeyboardAvoidingView>
-
-            {/* History Modal */}
-            <Modal
-                visible={isHistoryOpen}
-                animationType="slide"
-                presentationStyle="pageSheet"
-                onRequestClose={() => setIsHistoryOpen(false)}
-            >
-                <SafeAreaView style={styles.historyModal}>
-                    <View style={styles.historyHeader}>
-                        <View style={styles.historyTitleRow}>
-                            <History size={20} color={colors.primary} />
-                            <Text style={styles.historyTitle}>HISTORY</Text>
-                        </View>
-                        <TouchableOpacity onPress={() => setIsHistoryOpen(false)}>
-                            <X size={24} color={colors.textDim} />
-                        </TouchableOpacity>
-                    </View>
-
-                    <FlatList
-                        data={savedChats}
-                        keyExtractor={(item) => item.id}
-                        contentContainerStyle={styles.historyList}
-                        renderItem={({ item }) => (
-                            <View style={styles.historyRow}>
-                                <TouchableOpacity
-                                    style={styles.historyItem}
-                                    onPress={() => handleLoadChat(item.id)}
-                                >
-                                    <MessageSquare size={16} color={colors.primary + '99'} />
-                                    <View style={styles.historyItemContent}>
-                                        <Text style={styles.historyItemTitle} numberOfLines={1}>{item.title}</Text>
-                                        <Text style={styles.historyItemDate}>
-                                            {new Date(item.updatedAt).toLocaleDateString()}
-                                        </Text>
-                                    </View>
-                                    <ChevronRight size={14} color={colors.textDim} />
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={styles.deleteButton}
-                                    onPress={() => handleDeleteChat(item.id)}
-                                >
-                                    <Trash2 size={18} color={colors.error} />
-                                </TouchableOpacity>
-                            </View>
-                        )}
-                        ListEmptyComponent={
-                            <View style={styles.historyEmpty}>
-                                <MessageSquare size={32} color={colors.textDim + '50'} />
-                                <Text style={styles.historyEmptyText}>No previous chats</Text>
-                            </View>
-                        }
-                    />
-
-                    <TouchableOpacity
-                        style={styles.newChatFullButton}
-                        onPress={() => {
-                            setIsHistoryOpen(false);
-                            newChat();
-                        }}
-                    >
-                        <Plus size={16} color={colors.text} strokeWidth={3} />
-                        <Text style={styles.newChatFullButtonText}>START NEW CHAT</Text>
-                    </TouchableOpacity>
-                </SafeAreaView>
-            </Modal>
-
-            {/* Confirmation Modal */}
-            <Modal
-                visible={!!confirmModal}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setConfirmModal(null)}
-            >
-                <View style={styles.confirmOverlay}>
-                    <View style={styles.confirmModal}>
-                        <View style={styles.confirmIcon}>
-                            <MessageSquare size={24} color={colors.primary} />
-                        </View>
-                        <Text style={styles.confirmTitle}>{confirmModal?.title}</Text>
-                        <Text style={styles.confirmMessage}>{confirmModal?.message}</Text>
-                        <View style={styles.confirmButtons}>
-                            <TouchableOpacity
-                                style={styles.confirmCancel}
-                                onPress={() => setConfirmModal(null)}
-                            >
-                                <Text style={styles.confirmCancelText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.confirmConfirm}
-                                onPress={() => {
-                                    confirmModal?.onConfirm();
-                                    setConfirmModal(null);
-                                }}
-                            >
-                                <Text style={styles.confirmConfirmText}>Confirm</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
         </SafeAreaView>
     );
 }
 
-const markdownStylesUser = StyleSheet.create({
-    body: { color: colors.text, fontSize: 14, lineHeight: 20 },
-    code_inline: { backgroundColor: 'rgba(255,255,255,0.1)', color: colors.text, paddingHorizontal: 4, borderRadius: 4 },
-    code_block: { backgroundColor: 'rgba(255,255,255,0.1)', padding: 8, borderRadius: 8 },
-    link: { color: '#87ceeb' },
-});
-
-const markdownStylesBot = StyleSheet.create({
-    body: { color: '#e5e5e5', fontSize: 14, lineHeight: 20 },
-    code_inline: { backgroundColor: colors.surfaceHighlight, color: colors.primary, paddingHorizontal: 4, borderRadius: 4 },
-    code_block: { backgroundColor: colors.surfaceHighlight, padding: 8, borderRadius: 8 },
-    link: { color: colors.primary },
-});
-
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: colors.bg,
+        backgroundColor: '#0a0a0a',
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: spacing.md,
-        paddingVertical: spacing.md,
-        backgroundColor: colors.bg,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        backgroundColor: '#0a0a0a',
+        borderBottomWidth: 1,
+        borderBottomColor: '#171717',
     },
     headerButton: {
-        padding: spacing.sm,
-        backgroundColor: colors.surfaceHighlight,
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.border,
+        padding: 10,
+        backgroundColor: '#171717',
+        borderRadius: 20,
     },
     headerCenter: {
-        alignItems: 'center',
-    },
-    brandContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: spacing.sm,
     },
-    brandLogo: {
-        width: 32,
-        height: 32,
-        resizeMode: 'contain',
-    },
-    brandTitle: {
-        fontSize: 10,
-        fontWeight: '900',
-        color: colors.text,
+    modelName: {
+        color: '#fff',
+        fontWeight: 'bold',
+        fontSize: 12,
+        textTransform: 'uppercase',
         letterSpacing: 1,
-        marginBottom: 2,
     },
-    modelSelector: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        backgroundColor: colors.primary + '15',
-        borderRadius: borderRadius.md,
-        borderWidth: 1,
-        borderColor: colors.primary + '25',
-    },
-    modelSelectorText: {
+    connectionStatus: {
+        color: '#525252',
         fontSize: 9,
-        fontWeight: '700',
-        color: colors.primary,
-        letterSpacing: 0.5,
+        textTransform: 'uppercase',
+        fontWeight: 'bold',
+        marginLeft: 8,
     },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: spacing.lg,
-    },
-    modelPickerContent: {
-        width: '100%',
-        maxWidth: 300,
-        backgroundColor: colors.surfaceHighlight,
-        borderRadius: borderRadius.xl,
-        padding: spacing.md,
-        borderWidth: 1,
-        borderColor: colors.border,
-        gap: spacing.xs,
-    },
-    modelPickerTitle: {
-        fontSize: 10,
-        fontWeight: '900',
-        color: colors.textDim,
-        textAlign: 'center',
-        marginBottom: spacing.sm,
-        letterSpacing: 2,
-    },
-    modelOption: {
+    contextBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: spacing.md,
-        borderRadius: borderRadius.lg,
-        backgroundColor: colors.surface,
+        justifyContent: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        backgroundColor: '#171717',
+        gap: 6,
     },
-    modelOptionActive: {
-        backgroundColor: colors.primary + '15',
+    contextText: {
+        color: '#a3a3a3',
+        fontSize: 12,
+        fontWeight: '500',
+    },
+    actionBubble: {
+        alignSelf: 'center',
+        backgroundColor: 'rgba(139, 92, 246, 0.1)',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
         borderWidth: 1,
-        borderColor: colors.primary + '30',
+        borderColor: 'rgba(139, 92, 246, 0.2)',
+        marginVertical: 4,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        maxWidth: '90%',
     },
-    modelOptionText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textDim,
-    },
-    modelOptionTextActive: {
-        color: colors.primary,
-        fontWeight: '800',
-    },
-    newChatButton: {
-        padding: spacing.sm,
-        backgroundColor: colors.primary + '20',
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.primary + '30',
-    },
-    messageList: {
-        padding: spacing.md,
-        paddingBottom: 120,
-        gap: spacing.md,
+    actionText: {
+        color: '#a78bfa',
+        fontSize: 10,
+        fontWeight: 'bold',
+        textTransform: 'uppercase',
+        flexShrink: 1,
     },
     messageBubble: {
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderRadius: 16,
         maxWidth: '88%',
-        padding: spacing.md,
-        borderRadius: borderRadius.lg,
+        marginBottom: 12,
     },
     userBubble: {
-        backgroundColor: colors.primary,
+        backgroundColor: '#8b5cf6',
         alignSelf: 'flex-end',
         borderBottomRightRadius: 4,
     },
     botBubble: {
-        backgroundColor: colors.surface,
+        backgroundColor: '#171717',
         alignSelf: 'flex-start',
         borderBottomLeftRadius: 4,
         borderWidth: 1,
-        borderColor: colors.border,
-    },
-    actionBadge: {
-        alignSelf: 'center',
-        paddingHorizontal: spacing.md,
-        paddingVertical: spacing.xs,
-        backgroundColor: colors.primary + '10',
-        borderRadius: borderRadius.full,
-        borderWidth: 1,
-        borderColor: colors.primary + '20',
-    },
-    actionText: {
-        fontSize: 10,
-        color: colors.primary,
-        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+        borderColor: '#262626',
     },
     fileAttachment: {
-        marginTop: spacing.sm,
-        paddingTop: spacing.sm,
+        marginTop: 8,
+        paddingTop: 8,
         borderTopWidth: 1,
         borderTopColor: 'rgba(255,255,255,0.2)',
     },
     fileText: {
+        color: 'rgba(255,255,255,0.8)',
         fontSize: 12,
-        color: colors.text,
-        opacity: 0.9,
     },
-    emptyState: {
+    thinkingBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        backgroundColor: '#171717',
+        borderTopWidth: 1,
+        borderTopColor: '#262626',
+        gap: 12,
+    },
+    thinkingText: {
+        color: '#a3a3a3',
+        fontSize: 12,
+        fontWeight: '500',
         flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingTop: 100,
-        opacity: 0.5,
-    },
-    emptyLogo: {
-        width: 80,
-        height: 80,
-        resizeMode: 'contain',
-        marginBottom: spacing.md,
-    },
-    emptyTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: colors.text,
-        marginBottom: spacing.xs,
-    },
-    emptySubtitle: {
-        fontSize: 12,
-        color: colors.textDim,
-        textTransform: 'uppercase',
-        letterSpacing: 2,
-        fontStyle: 'italic',
-    },
-    filePreview: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginHorizontal: spacing.md,
-        marginBottom: spacing.sm,
-        padding: spacing.sm,
-        backgroundColor: colors.surface,
-        borderRadius: borderRadius.md,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    filePreviewText: {
-        fontSize: 12,
-        color: colors.text,
-    },
-    inputContainer: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        marginHorizontal: spacing.md,
-        marginBottom: spacing.md,
-        padding: spacing.xs,
-        backgroundColor: colors.surfaceHighlight + 'CC',
-        borderRadius: 28,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    attachButton: {
-        padding: spacing.sm,
-        marginBottom: 2,
-    },
-    input: {
-        flex: 1,
-        maxHeight: 100,
-        paddingVertical: spacing.sm,
-        paddingHorizontal: spacing.xs,
-        fontSize: 15,
-        color: colors.text,
-    },
-    sendButton: {
-        padding: spacing.sm,
-        borderRadius: borderRadius.full,
-        backgroundColor: colors.surfaceHighlight,
-        marginBottom: 2,
-    },
-    sendButtonActive: {
-        backgroundColor: colors.primary,
-    },
-    statusContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.xs,
-        marginBottom: 2,
-        marginRight: spacing.xs,
-    },
-    statusBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.xs,
-        paddingHorizontal: spacing.sm,
-        paddingVertical: spacing.xs,
-        backgroundColor: colors.primary + '10',
-        borderRadius: borderRadius.full,
-        borderWidth: 1,
-        borderColor: colors.primary + '20',
-    },
-    pulsingDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: colors.primary,
-    },
-    statusText: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: colors.primary,
     },
     stopButton: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: colors.error + '20',
-        borderWidth: 1,
-        borderColor: colors.error + '30',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    historyModal: {
-        flex: 1,
-        backgroundColor: colors.surface,
-    },
-    historyHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: spacing.lg,
-        paddingVertical: spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
+        backgroundColor: 'rgba(239, 68, 68, 0.15)',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+        gap: 6,
     },
-    historyTitleRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-    },
-    historyTitle: {
-        fontSize: 18,
-        fontWeight: '900',
-        color: colors.text,
-        letterSpacing: 1,
-    },
-    historyList: {
-        padding: spacing.md,
-        gap: spacing.sm,
-    },
-    historyRow: {
-        flexDirection: 'row',
-        gap: spacing.sm,
-        marginBottom: spacing.sm,
-    },
-    historyItem: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-        padding: spacing.md,
-        backgroundColor: colors.surfaceHighlight,
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    historyItemContent: {
-        flex: 1,
-    },
-    historyItemTitle: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: colors.text,
-    },
-    historyItemDate: {
+    stopButtonText: {
+        color: '#ef4444',
         fontSize: 10,
-        color: colors.textDim,
-        marginTop: 2,
-    },
-    deleteButton: {
-        padding: spacing.md,
-        backgroundColor: colors.error + '20',
-        borderRadius: borderRadius.lg,
-        borderWidth: 1,
-        borderColor: colors.error + '30',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    historyEmpty: {
-        alignItems: 'center',
-        paddingVertical: spacing.xl * 2,
-    },
-    historyEmptyText: {
-        fontSize: 12,
-        color: colors.textDim,
+        fontWeight: 'bold',
         textTransform: 'uppercase',
-        letterSpacing: 2,
-        marginTop: spacing.sm,
     },
-    newChatFullButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.8)',
         justifyContent: 'center',
-        gap: spacing.sm,
-        marginHorizontal: spacing.lg,
-        marginBottom: spacing.lg,
-        paddingVertical: spacing.md,
-        backgroundColor: colors.primary,
-        borderRadius: borderRadius.lg,
+        paddingHorizontal: 24,
     },
-    newChatFullButtonText: {
+    modalContent: {
+        backgroundColor: '#171717',
+        borderRadius: 24,
+        paddingVertical: 20,
+        borderWidth: 1,
+        borderColor: '#262626',
+    },
+    modalTitle: {
+        color: '#fff',
+        fontWeight: 'bold',
+        textAlign: 'center',
+        marginBottom: 16,
+        fontSize: 16,
+    },
+    modelOption: {
+        paddingHorizontal: 24,
+        paddingVertical: 16,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    modelOptionActive: {
+        backgroundColor: 'rgba(139, 92, 246, 0.2)',
+    },
+    modelOptionText: {
+        color: '#a3a3a3',
+        fontSize: 14,
+        fontWeight: '500',
+    },
+    modelOptionTextActive: {
+        color: '#a78bfa',
+    },
+    inputArea: {
+        padding: 16,
+        backgroundColor: '#0a0a0a',
+        borderTopWidth: 1,
+        borderTopColor: '#171717',
+    },
+    selectedFileRow: {
+        marginBottom: 8,
+        padding: 8,
+        backgroundColor: '#262626',
+        borderRadius: 8,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    selectedFileText: {
+        color: '#fff',
         fontSize: 12,
-        fontWeight: '900',
-        color: colors.text,
-        letterSpacing: 2,
+        marginLeft: 8,
     },
-    confirmOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: spacing.lg,
-    },
-    confirmModal: {
-        width: '100%',
-        maxWidth: 340,
-        backgroundColor: colors.surfaceHighlight,
-        borderRadius: borderRadius.xl,
-        padding: spacing.xl,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    confirmIcon: {
-        width: 48,
-        height: 48,
-        backgroundColor: colors.primary + '20',
-        borderRadius: borderRadius.lg,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: spacing.lg,
-    },
-    confirmTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: colors.text,
-        marginBottom: spacing.sm,
-    },
-    confirmMessage: {
-        fontSize: 14,
-        color: colors.textDim,
-        lineHeight: 20,
-        marginBottom: spacing.xl,
-    },
-    confirmButtons: {
+    inputRow: {
         flexDirection: 'row',
-        gap: spacing.sm,
-    },
-    confirmCancel: {
-        flex: 1,
-        paddingVertical: spacing.sm + 2,
-        backgroundColor: colors.surfaceHighlight,
-        borderRadius: borderRadius.lg,
-        alignItems: 'center',
+        alignItems: 'flex-end',
+        backgroundColor: '#171717',
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: '#262626',
+        borderRadius: 28,
+        padding: 6,
     },
-    confirmCancelText: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: colors.text,
+    inputButton: {
+        padding: 10,
+        borderRadius: 20,
     },
-    confirmConfirm: {
+    textInput: {
         flex: 1,
-        paddingVertical: spacing.sm + 2,
-        backgroundColor: colors.primary,
-        borderRadius: borderRadius.lg,
-        alignItems: 'center',
-    },
-    confirmConfirmText: {
+        color: '#fff',
         fontSize: 14,
-        fontWeight: '700',
-        color: colors.text,
+        paddingVertical: 12,
+        paddingHorizontal: 4,
+        maxHeight: 96,
+    },
+    sendButton: {
+        padding: 10,
+        borderRadius: 20,
+        backgroundColor: '#262626',
+    },
+    sendButtonActive: {
+        backgroundColor: '#8b5cf6',
     },
 });

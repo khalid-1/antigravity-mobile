@@ -18,6 +18,8 @@ interface ChatMessage {
     role: 'user' | 'bot';
     content: string;
     isAction?: boolean;
+    isCollapsible?: boolean;
+    isExpanded?: boolean;
     file?: { name: string };
 }
 
@@ -37,6 +39,7 @@ interface AppContextType {
     token: string;
     setToken: (token: string) => void;
     isConnected: boolean;
+    isThinking: boolean;
     projects: Project[];
     setProjects: (projects: Project[]) => void;
     activeProject: string | null;
@@ -44,6 +47,7 @@ interface AppContextType {
     chatHistory: ChatMessage[];
     setChatHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
     newChat: () => Promise<void>;
+    stopGeneration: () => Promise<void>;
     savedChats: SavedChat[];
     setSavedChats: (chats: SavedChat[]) => void;
     loadChat: (chatId: string) => Promise<boolean>;
@@ -56,6 +60,10 @@ interface AppContextType {
     ws: WebSocket | null;
     serverHost: string;
     setServerHost: (host: string) => void;
+    activeModel: string;
+    setActiveModel: (model: string) => void;
+    models: string[];
+    toggleMessageExpanded: (index: number) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -68,6 +76,7 @@ export function AppProvider({ children }: AppProviderProps) {
     const [token, setTokenState] = useState('');
     const [serverHost, setServerHostState] = useState('localhost:8787');
     const [isConnected, setIsConnected] = useState(false);
+    const [isThinking, setIsThinking] = useState(false);
     const [projects, setProjects] = useState<Project[]>([]);
     const [activeProject, setActiveProject] = useState<string | null>(null);
     const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
@@ -81,6 +90,10 @@ export function AppProvider({ children }: AppProviderProps) {
     });
     const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
 
+    // Model Selection State
+    const [activeModel, setActiveModel] = useState('Gemini 3 Flash');
+    const models = ['Gemini 3 Pro', 'Gemini 3 Flash', 'Gemini 2.0'];
+
     // Load initial data from storage
     useEffect(() => {
         (async () => {
@@ -88,7 +101,7 @@ export function AppProvider({ children }: AppProviderProps) {
             if (storedToken) setTokenState(storedToken);
 
             const storedHost = await storage.getServerHost();
-            setServerHostState(storedHost);
+            if (storedHost) setServerHostState(storedHost);
 
             const storedHistory = await storage.getChatHistory();
             if (storedHistory.length > 0) setChatHistory(storedHistory);
@@ -115,37 +128,57 @@ export function AppProvider({ children }: AppProviderProps) {
     useEffect(() => {
         if (!token || !serverHost) return;
 
-        const protocol = 'ws:'; // React Native uses ws: for local dev
-        const socket = new WebSocket(`${protocol}//${serverHost}/ws?token=${token}`);
+        let socket: WebSocket | null = null;
+        let reconnectTimeout: NodeJS.Timeout;
 
-        socket.onopen = () => {
-            setIsConnected(true);
-            console.log('WS Connected');
+        const connect = () => {
+            // For React Native Expo Go (on physical device), localhost won't work.
+            // But if user is on simulator, localhost is fine.
+            // We use the serverHost directly.
+            const protocol = 'ws:';
+            const wsUrl = `${protocol}//${serverHost}/ws?token=${token}`;
+
+            console.log('Connecting to WS:', wsUrl);
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                setIsConnected(true);
+                console.log('WS Connected');
+            };
+
+            socket.onclose = () => {
+                setIsConnected(false);
+                console.log('WS Disconnected');
+                // Optional: Auto-reconnect logic could go here, but avoiding infinite loops for now
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleWsMessage(data);
+                } catch (e) {
+                    console.error("WS Parse Error", e);
+                }
+            };
+
+            socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            setWs(socket);
         };
 
-        socket.onclose = () => {
-            setIsConnected(false);
-            console.log('WS Disconnected');
-        };
-
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            handleWsMessage(data);
-        };
-
-        socket.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-
-        setWs(socket);
+        connect();
 
         return () => {
-            socket.close();
+            if (socket) socket.close();
+            clearTimeout(reconnectTimeout);
         };
     }, [token, serverHost]);
 
     const handleWsMessage = (data: any) => {
         if (data.type === 'chat:token') {
+            setIsThinking(true);
             setChatHistory(prev => {
                 const last = prev[prev.length - 1];
                 if (last && last.role === 'bot' && !last.isAction) {
@@ -154,13 +187,19 @@ export function AppProvider({ children }: AppProviderProps) {
                 return [...prev, { role: 'bot', content: data.token }];
             });
         } else if (data.type === 'chat:action') {
-            setChatHistory(prev => [...prev, { role: 'bot', isAction: true, content: data.action }]);
+            setIsThinking(true);
+            setChatHistory(prev => [...prev, { role: 'bot', isAction: true, isCollapsible: true, isExpanded: false, content: data.action }]);
+        } else if (data.type === 'chat:done' || data.type === 'chat:end' || data.type === 'chat:complete') {
+            setIsThinking(false);
         } else if (data.type === 'chat:stop') {
+            setIsThinking(false);
             setChatHistory(prev => {
                 const last = prev[prev.length - 1];
                 if (last && last.role === 'bot' && last.content.includes("Task stopped")) return prev;
-                return [...prev, { role: 'bot', content: "_Task stopped by user._ 🛑" }];
+                return [...prev, { role: 'bot', content: "_Task stopped by user._" }];
             });
+        } else if (data.type === 'chat:error') {
+            setIsThinking(false);
         } else if (data.type === 'projects:sync') {
             initData();
         } else if (data.type === 'chats:refresh') {
@@ -182,6 +221,8 @@ export function AppProvider({ children }: AppProviderProps) {
                 body: body ? JSON.stringify(body) : null,
             });
             if (res.status === 401) {
+                // Only clear token if it's strictly an auth error, to avoid race conditions
+                // For now, let's keep it but be careful.
                 setToken('');
                 return null;
             }
@@ -194,7 +235,10 @@ export function AppProvider({ children }: AppProviderProps) {
 
     const initData = async () => {
         const prjs = await api<Project[]>('/projects');
-        if (prjs) setProjects(prjs);
+        if (prjs) {
+            setProjects(prjs);
+            // Don't auto-select project - default to General Context (null)
+        }
 
         const cfg = await api<Config>('/config');
         if (cfg) setConfig({ ...cfg, serverHost });
@@ -214,8 +258,20 @@ export function AppProvider({ children }: AppProviderProps) {
 
     const newChat = async () => {
         setChatHistory([]);
+        setIsThinking(false);
         await storage.clearChatHistory();
         await api('/chat/clear', 'POST', { projectId: activeProject });
+    };
+
+    const stopGeneration = async () => {
+        setIsThinking(false);
+        await api('/chat/stop', 'POST', { projectId: activeProject });
+    };
+
+    const toggleMessageExpanded = (index: number) => {
+        setChatHistory(prev => prev.map((msg, i) =>
+            i === index ? { ...msg, isExpanded: !msg.isExpanded } : msg
+        ));
     };
 
     const clearTerminal = () => setTerminalOutput([]);
@@ -263,10 +319,12 @@ export function AppProvider({ children }: AppProviderProps) {
         <AppContext.Provider value={{
             token, setToken,
             isConnected,
+            isThinking,
             projects, setProjects,
             activeProject, setActiveProject,
             chatHistory, setChatHistory,
             newChat,
+            stopGeneration,
             savedChats, setSavedChats,
             loadChat,
             terminalOutput,
@@ -276,6 +334,9 @@ export function AppProvider({ children }: AppProviderProps) {
             api,
             ws,
             serverHost, setServerHost,
+            activeModel, setActiveModel,
+            models,
+            toggleMessageExpanded
         }}>
             {children}
         </AppContext.Provider>

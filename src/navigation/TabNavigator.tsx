@@ -1,64 +1,64 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MessageSquare, Terminal, Settings } from 'lucide-react-native';
+import { Home, MessageSquare, Terminal, User } from 'lucide-react-native';
+import HomeScreen from '../screens/HomeScreen';
 import ChatScreen from '../screens/ChatScreen';
 import DevScreen from '../screens/DevScreen';
 import SettingsScreen from '../screens/SettingsScreen';
-import { colors } from '../theme/colors';
+import { Platform } from 'react-native';
 
 const Tab = createBottomTabNavigator();
 
 export default function TabNavigator() {
-    const insets = useSafeAreaInsets();
-
     return (
         <Tab.Navigator
             screenOptions={{
                 headerShown: false,
                 tabBarStyle: {
-                    backgroundColor: colors.surface,
-                    borderTopColor: colors.border,
+                    backgroundColor: '#0a0a0a', // neutral-950
+                    borderTopColor: '#171717', // neutral-900
                     borderTopWidth: 1,
-                    height: 60 + insets.bottom,
-                    paddingBottom: insets.bottom,
-                    paddingTop: 8,
+                    height: Platform.OS === 'ios' ? 90 : 70,
+                    paddingBottom: Platform.OS === 'ios' ? 30 : 10,
+                    paddingTop: 10,
                 },
-                tabBarActiveTintColor: colors.primary,
-                tabBarInactiveTintColor: colors.textDim,
+                tabBarActiveTintColor: '#8b5cf6', // violet-500
+                tabBarInactiveTintColor: '#525252', // neutral-600
                 tabBarLabelStyle: {
                     fontSize: 10,
-                    fontWeight: '600',
+                    fontWeight: '700',
                     textTransform: 'uppercase',
                     letterSpacing: 1,
+                    marginTop: 2,
                 },
             }}
         >
             <Tab.Screen
+                name="Home"
+                component={HomeScreen}
+                options={{
+                    tabBarIcon: ({ color, focused }) => <Home color={color} size={24} strokeWidth={focused ? 2.5 : 2} />,
+                }}
+            />
+            <Tab.Screen
                 name="Chat"
                 component={ChatScreen}
                 options={{
-                    tabBarIcon: ({ color }) => (
-                        <MessageSquare color={color} size={22} strokeWidth={2.5} />
-                    ),
+                    tabBarIcon: ({ color, focused }) => <MessageSquare color={color} size={24} strokeWidth={focused ? 2.5 : 2} />,
                 }}
             />
             <Tab.Screen
                 name="Dev"
                 component={DevScreen}
                 options={{
-                    tabBarIcon: ({ color }) => (
-                        <Terminal color={color} size={22} strokeWidth={2.5} />
-                    ),
+                    tabBarIcon: ({ color, focused }) => <Terminal color={color} size={24} strokeWidth={focused ? 2.5 : 2} />,
                 }}
             />
             <Tab.Screen
                 name="Settings"
                 component={SettingsScreen}
                 options={{
-                    tabBarIcon: ({ color }) => (
-                        <Settings color={color} size={22} strokeWidth={2.5} />
-                    ),
+                    tabBarIcon: ({ color, focused }) => <User color={color} size={24} strokeWidth={focused ? 2.5 : 2} />,
                 }}
             />
         </Tab.Navigator>
