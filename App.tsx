@@ -1,20 +1,32 @@
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { AppProvider, useApp } from './src/context/AppContext';
+import AuthScreen from './src/screens/AuthScreen';
+import TabNavigator from './src/navigation/TabNavigator';
 
-export default function App() {
+function Root() {
+  const { token } = useApp();
+
+  if (!token) {
+    return <AuthScreen />;
+  }
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <NavigationContainer>
+      <TabNavigator />
+    </NavigationContainer>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppProvider>
+        <StatusBar style="light" />
+        <Root />
+      </AppProvider>
+    </SafeAreaProvider>
+  );
+}
