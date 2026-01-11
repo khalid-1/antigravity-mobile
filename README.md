@@ -4,6 +4,8 @@
 
 Antigravity is a powerful mobile application that puts an AI coding agent in your pocket. Control your development environment, chat with an intelligent assistant that can read/write files and run terminal commands, and monitor your projects — all from your phone.
 
+**Developed by: Khalid Said**
+
 ---
 
 ## 📱 Features
@@ -194,7 +196,7 @@ npx nodemon server.js
 
 ## 📝 License
 
-MIT © 2026 Antigravity
+MIT © 2026 Khalid Said
 
 ---
 

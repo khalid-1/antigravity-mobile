@@ -135,21 +135,24 @@ const agentTools = {
         if (!fs.existsSync(target)) throw new Error(`File not found: ${file}`);
         return fs.readFileSync(target, 'utf8');
     },
-    write_file: async ({ file, content }, projectPath) => {
+    write_file: async ({ file, content }, projectPath, projectId) => {
         const target = path.isAbsolute(file) ? file : path.resolve(projectPath, file);
         if (!target.startsWith(projectPath)) {
             throw new Error(`Access denied: "${file}" is outside the project boundaries.`);
         }
 
         let previousContent = null;
+        let backupId = null;
         if (fs.existsSync(target)) {
             previousContent = fs.readFileSync(target, 'utf8');
+            // Create backup before overwriting
+            backupId = createBackup(target, projectId);
         }
 
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, content);
 
-        return { status: "success", file, previousContent };
+        return { status: "success", file, previousContent, backupId };
     },
     undo_last_write: async ({ projectId }, projectPath) => {
         const history = fileChangeHistory[projectId];
@@ -210,6 +213,61 @@ if (!fs.existsSync(APP_DATA_DIR)) {
     fs.mkdirSync(APP_DATA_DIR, { recursive: true });
 }
 const CHATS_FILE = path.join(APP_DATA_DIR, 'chats.json');
+
+// --- Backup System ---
+const BACKUPS_DIR = path.join(APP_DATA_DIR, 'backups');
+const BACKUPS_FILE = path.join(APP_DATA_DIR, 'backups.json');
+if (!fs.existsSync(BACKUPS_DIR)) {
+    fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+}
+
+function loadBackups() {
+    if (!fs.existsSync(BACKUPS_FILE)) return [];
+    try {
+        return JSON.parse(fs.readFileSync(BACKUPS_FILE, 'utf8'));
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveBackupMetadata(backups) {
+    fs.writeFileSync(BACKUPS_FILE, JSON.stringify(backups, null, 2));
+}
+
+function createBackup(filePath, projectId) {
+    if (!fs.existsSync(filePath)) return null; // New file, no backup needed
+
+    const originalContent = fs.readFileSync(filePath, 'utf8');
+    const timestamp = Date.now();
+    const fileName = path.basename(filePath);
+    const backupId = `${timestamp}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const backupPath = path.join(BACKUPS_DIR, backupId);
+
+    // Save backup content
+    fs.writeFileSync(backupPath, originalContent);
+
+    // Update metadata
+    const backups = loadBackups();
+    backups.unshift({
+        id: backupId,
+        originalPath: filePath,
+        fileName: fileName,
+        projectId: projectId || 'unknown',
+        timestamp: new Date().toISOString(),
+        size: originalContent.length
+    });
+
+    // Keep only last 50 backups
+    if (backups.length > 50) {
+        const removed = backups.splice(50);
+        removed.forEach(b => {
+            try { fs.unlinkSync(path.join(BACKUPS_DIR, b.id)); } catch (e) { }
+        });
+    }
+
+    saveBackupMetadata(backups);
+    return backupId;
+}
 
 function loadAllChats() {
     if (!fs.existsSync(CHATS_FILE)) return {};
@@ -338,7 +396,8 @@ async function runAgentLoop(message, projectId, msgId, modelId, fileData = null)
                 broadcast({ type: 'chat:action', id: msgId, action: name });
 
                 try {
-                    const output = await agentTools[name](args, projectPath);
+                    // Pass projectId for backup creation in write_file
+                    const output = await agentTools[name](args, projectPath, projectId);
 
                     // Log file changes for Undo context
                     if (name === 'write_file') {
@@ -551,6 +610,70 @@ fastify.post('/api/config', { preHandler: verifyAuth }, async (req) => {
     fs.writeFileSync(envPath, newContent);
     console.log("Configuration updated and saved to .env.local");
     return { status: 'success' };
+});
+
+
+// --- Backup Routes ---
+fastify.get('/api/backups', { preHandler: verifyAuth }, async () => {
+    return loadBackups();
+});
+
+fastify.post('/api/backups/:id/restore', { preHandler: verifyAuth }, async (req, reply) => {
+    const { id } = req.params;
+    const backups = loadBackups();
+    const backup = backups.find(b => b.id === id);
+
+    if (!backup) {
+        return reply.code(404).send({ error: 'Backup not found' });
+    }
+
+    const backupPath = path.join(BACKUPS_DIR, backup.id);
+    if (!fs.existsSync(backupPath)) {
+        return reply.code(404).send({ error: 'Backup file missing' });
+    }
+
+    try {
+        const content = fs.readFileSync(backupPath, 'utf8');
+        fs.mkdirSync(path.dirname(backup.originalPath), { recursive: true });
+        fs.writeFileSync(backup.originalPath, content);
+        return { status: 'restored', file: backup.fileName };
+    } catch (e) {
+        return reply.code(500).send({ error: e.message });
+    }
+});
+
+fastify.delete('/api/backups/:id', { preHandler: verifyAuth }, async (req, reply) => {
+    const { id } = req.params;
+    const backups = loadBackups();
+    const index = backups.findIndex(b => b.id === id);
+
+    if (index === -1) {
+        return reply.code(404).send({ error: 'Backup not found' });
+    }
+
+    // Remove file
+    const backupPath = path.join(BACKUPS_DIR, backups[index].id);
+    try { fs.unlinkSync(backupPath); } catch (e) { }
+
+    // Remove from metadata
+    backups.splice(index, 1);
+    saveBackupMetadata(backups);
+
+    return { status: 'deleted' };
+});
+
+fastify.delete('/api/backups', { preHandler: verifyAuth }, async () => {
+    const backups = loadBackups();
+
+    // Delete all backup files
+    backups.forEach(b => {
+        try { fs.unlinkSync(path.join(BACKUPS_DIR, b.id)); } catch (e) { }
+    });
+
+    // Clear metadata
+    saveBackupMetadata([]);
+
+    return { status: 'cleared', count: backups.length };
 });
 
 

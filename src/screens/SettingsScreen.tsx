@@ -1,12 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
-import { Settings, Server, Key, Folder, LogOut, ChevronRight, Bell, Shield, CircleHelp, ChevronDown, Check, Save } from 'lucide-react-native';
+import { Settings, Server, Key, Folder, LogOut, ChevronRight, Bell, Shield, CircleHelp, ChevronDown, Check, Save, History, RotateCcw, Trash2 } from 'lucide-react-native';
 import ScreenWrapper from '../components/ScreenWrapper';
 import { useApp } from '../context/AppContext';
 import * as Haptics from 'expo-haptics';
 
+interface Backup {
+    id: string;
+    originalPath: string;
+    fileName: string;
+    projectId: string;
+    timestamp: string;
+    size: number;
+}
+
 export default function SettingsScreen() {
-    const { config, saveConfig, serverHost, setServerHost, setToken } = useApp();
+    const { config, saveConfig, serverHost, setServerHost, setToken, api } = useApp();
 
     // Local state for configuration
     const [localConfig, setLocalConfig] = useState({
@@ -18,8 +27,14 @@ export default function SettingsScreen() {
 
     // UI state
     const [isServerConfigExpanded, setIsServerConfigExpanded] = useState(false);
+    const [isBackupsExpanded, setIsBackupsExpanded] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+    // Backups state
+    const [backups, setBackups] = useState<Backup[]>([]);
+    const [isLoadingBackups, setIsLoadingBackups] = useState(false);
+    const [restoringId, setRestoringId] = useState<string | null>(null);
 
     // Sync from context when it changes (initial load)
     useEffect(() => {
@@ -30,6 +45,82 @@ export default function SettingsScreen() {
         });
         setLocalServerHost(serverHost);
     }, [config, serverHost]);
+
+    // Load backups when section is expanded
+    useEffect(() => {
+        if (isBackupsExpanded) {
+            loadBackups();
+        }
+    }, [isBackupsExpanded]);
+
+    const loadBackups = async () => {
+        setIsLoadingBackups(true);
+        try {
+            const data = await api('/backups');
+            setBackups(data || []);
+        } catch (e) {
+            console.log('Failed to load backups:', e);
+        }
+        setIsLoadingBackups(false);
+    };
+
+    const handleRestore = async (backup: Backup) => {
+        Alert.alert(
+            "Restore Backup",
+            `Restore ${backup.fileName} to its previous state?`,
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Restore",
+                    onPress: async () => {
+                        setRestoringId(backup.id);
+                        try {
+                            await api(`/backups/${backup.id}/restore`, 'POST');
+                            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            Alert.alert("Restored", `${backup.fileName} has been restored.`);
+                            loadBackups();
+                        } catch (e) {
+                            Alert.alert("Error", "Failed to restore backup.");
+                        }
+                        setRestoringId(null);
+                    }
+                }
+            ]
+        );
+    };
+
+    const handleDeleteBackup = async (backup: Backup) => {
+        try {
+            await api(`/backups/${backup.id}`, 'DELETE');
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setBackups(prev => prev.filter(b => b.id !== backup.id));
+        } catch (e) {
+            Alert.alert("Error", "Failed to delete backup.");
+        }
+    };
+
+    const handleClearAllBackups = () => {
+        Alert.alert(
+            "Clear All Backups",
+            "This will permanently delete all backup history. This cannot be undone.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Clear All",
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await api('/backups', 'DELETE');
+                            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            setBackups([]);
+                        } catch (e) {
+                            Alert.alert("Error", "Failed to clear backups.");
+                        }
+                    }
+                }
+            ]
+        );
+    };
 
     const handleSave = async () => {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -72,6 +163,11 @@ export default function SettingsScreen() {
         );
     };
 
+    const formatTimestamp = (ts: string) => {
+        const date = new Date(ts);
+        return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+
     return (
         <ScreenWrapper style="px-4 pt-6">
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -85,7 +181,7 @@ export default function SettingsScreen() {
                 </View>
 
                 {/* Collapsible Server Configuration */}
-                <View className="mb-6">
+                <View className="mb-4">
                     <View className="bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden">
                         <TouchableOpacity
                             className="flex-row items-center justify-between p-5 bg-neutral-900 active:bg-neutral-800"
@@ -170,8 +266,8 @@ export default function SettingsScreen() {
                                     onPress={handleSave}
                                     disabled={isSaving}
                                     className={`w-full py-4 rounded-xl items-center justify-center flex-row gap-2 ${saveStatus === 'success' ? 'bg-green-600' :
-                                            saveStatus === 'error' ? 'bg-red-600' :
-                                                'bg-violet-600 active:bg-violet-700'
+                                        saveStatus === 'error' ? 'bg-red-600' :
+                                            'bg-violet-600 active:bg-violet-700'
                                         }`}
                                 >
                                     {isSaving ? (
@@ -188,6 +284,92 @@ export default function SettingsScreen() {
                                         </>
                                     )}
                                 </TouchableOpacity>
+                            </View>
+                        )}
+                    </View>
+                </View>
+
+                {/* Collapsible Change History / Backups */}
+                <View className="mb-6">
+                    <View className="bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden">
+                        <TouchableOpacity
+                            className="flex-row items-center justify-between p-5 bg-neutral-900 active:bg-neutral-800"
+                            onPress={() => {
+                                Haptics.selectionAsync();
+                                setIsBackupsExpanded(!isBackupsExpanded);
+                            }}
+                            activeOpacity={0.9}
+                        >
+                            <View className="flex-row items-center gap-4">
+                                <View className="w-10 h-10 rounded-2xl bg-amber-900/20 items-center justify-center border border-amber-500/20">
+                                    <History size={20} color="#fbbf24" />
+                                </View>
+                                <View>
+                                    <Text className="text-white font-bold text-base">Change History</Text>
+                                    <Text className="text-neutral-500 text-xs mt-0.5">{backups.length} backup{backups.length !== 1 ? 's' : ''} available</Text>
+                                </View>
+                            </View>
+                            <ChevronDown
+                                size={20}
+                                color="#525252"
+                                style={{ transform: [{ rotate: isBackupsExpanded ? '180deg' : '0deg' }] }}
+                            />
+                        </TouchableOpacity>
+
+                        {isBackupsExpanded && (
+                            <View className="border-t border-neutral-800 bg-[#0d0d0d]">
+                                {isLoadingBackups ? (
+                                    <View className="py-8 items-center">
+                                        <ActivityIndicator color="#fbbf24" />
+                                    </View>
+                                ) : backups.length === 0 ? (
+                                    <View className="py-8 items-center">
+                                        <Text className="text-neutral-500 text-sm">No backups yet</Text>
+                                        <Text className="text-neutral-600 text-xs mt-1">Backups are created when files are modified</Text>
+                                    </View>
+                                ) : (
+                                    <>
+                                        {backups.slice(0, 10).map((backup, index) => (
+                                            <View
+                                                key={backup.id}
+                                                className={`flex-row items-center justify-between px-5 py-4 ${index !== 0 ? 'border-t border-neutral-800' : ''}`}
+                                            >
+                                                <View className="flex-1 mr-3">
+                                                    <Text className="text-white font-mono text-sm" numberOfLines={1}>{backup.fileName}</Text>
+                                                    <Text className="text-neutral-500 text-xs mt-1">{formatTimestamp(backup.timestamp)}</Text>
+                                                </View>
+                                                <View className="flex-row gap-2">
+                                                    <TouchableOpacity
+                                                        onPress={() => handleRestore(backup)}
+                                                        disabled={restoringId === backup.id}
+                                                        className="bg-amber-500/20 px-3 py-2 rounded-lg flex-row items-center gap-1"
+                                                    >
+                                                        {restoringId === backup.id ? (
+                                                            <ActivityIndicator size="small" color="#fbbf24" />
+                                                        ) : (
+                                                            <RotateCcw size={14} color="#fbbf24" />
+                                                        )}
+                                                        <Text className="text-amber-500 text-xs font-bold">Restore</Text>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity
+                                                        onPress={() => handleDeleteBackup(backup)}
+                                                        className="bg-neutral-800 px-2 py-2 rounded-lg"
+                                                    >
+                                                        <Trash2 size={14} color="#737373" />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        ))}
+                                        {backups.length > 0 && (
+                                            <TouchableOpacity
+                                                onPress={handleClearAllBackups}
+                                                className="mx-5 my-4 py-3 rounded-xl border border-red-500/20 items-center"
+                                            >
+                                                <Text className="text-red-500 text-xs font-bold uppercase">Clear All Backups</Text>
+                                            </TouchableOpacity>
+                                        )}
+                                    </>
+                                )}
                             </View>
                         )}
                     </View>
